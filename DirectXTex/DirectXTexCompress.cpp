@@ -11,10 +11,7 @@
 
 #include "DirectXTexP.h"
 
-#ifdef _OPENMP
-#include <omp.h>
-#pragma warning(disable : 4616 6993)
-#endif
+#include <ppl.h>
 
 #include "BC.h"
 
@@ -197,7 +194,6 @@ namespace
 
 
     //-------------------------------------------------------------------------------------
-#ifdef _OPENMP
     HRESULT CompressBC_Parallel(
         const Image& image,
         const Image& result,
@@ -239,8 +235,7 @@ namespace
 
         bool fail = false;
 
-    #pragma omp parallel for
-        for (int nb = 0; nb < static_cast<int>(nBlocks); ++nb)
+        concurrency::parallel_for(0, static_cast<int>(nBlocks), [&](int nb)
         {
             const int nbWidth = std::max<int>(1, int((image.width + 3) / 4));
 
@@ -323,11 +318,10 @@ namespace
                 pfEncode(pDest, temp, bcflags);
             else
                 D3DXEncodeBC1(pDest, temp, threshold, bcflags);
-        }
+        });
 
         return (fail) ? E_FAIL : S_OK;
     }
-#endif // _OPENMP
 
 
     //-------------------------------------------------------------------------------------
@@ -615,11 +609,7 @@ HRESULT DirectX::Compress(
     // Compress single image
     if (compress & TEX_COMPRESS_PARALLEL)
     {
-    #ifndef _OPENMP
-        return E_NOTIMPL;
-    #else
         hr = CompressBC_Parallel(srcImage, *img, GetBCFlags(compress), GetSRGBFlags(compress), threshold);
-    #endif // _OPENMP
     }
     else
     {
@@ -687,9 +677,6 @@ HRESULT DirectX::Compress(
 
         if ((compress & TEX_COMPRESS_PARALLEL))
         {
-        #ifndef _OPENMP
-            return E_NOTIMPL;
-        #else
             if (compress & TEX_COMPRESS_PARALLEL)
             {
                 hr = CompressBC_Parallel(src, dest[index], GetBCFlags(compress), GetSRGBFlags(compress), threshold);
@@ -699,7 +686,6 @@ HRESULT DirectX::Compress(
                     return  hr;
                 }
             }
-        #endif // _OPENMP
         }
         else
         {

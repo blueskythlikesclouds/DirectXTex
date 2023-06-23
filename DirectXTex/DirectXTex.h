@@ -52,6 +52,7 @@ struct IWICMetadataQueryReader;
 
 namespace DirectX
 {
+    void __cdecl Initialize() noexcept;
 
     //---------------------------------------------------------------------------------
     // DXGI Format Utilities

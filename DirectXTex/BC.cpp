@@ -16,6 +16,7 @@
 //#define COLOR_AVG_0WEIGHTS
 
 #include "BC.h"
+#include "rgbcx.cpp"
 
 using namespace DirectX;
 using namespace DirectX::PackedVector;
@@ -724,6 +725,11 @@ namespace
 // Entry points
 //=====================================================================================
 
+void DirectX::Initialize() noexcept
+{
+    rgbcx::init();
+}
+
 //-------------------------------------------------------------------------------------
 // BC1 Compression
 //-------------------------------------------------------------------------------------
@@ -741,57 +747,22 @@ void DirectX::D3DXEncodeBC1(uint8_t *pBC, const XMVECTOR *pColor, float threshol
 
     HDRColorA Color[NUM_PIXELS_PER_BLOCK];
 
-    if (flags & BC_FLAGS_DITHER_A)
+    for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; ++i)
     {
-        float fError[NUM_PIXELS_PER_BLOCK] = {};
-
-        for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; ++i)
-        {
-            HDRColorA clr;
-            XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&clr), pColor[i]);
-
-            const float fAlph = clr.a + fError[i];
-
-            Color[i].r = clr.r;
-            Color[i].g = clr.g;
-            Color[i].b = clr.b;
-            Color[i].a = static_cast<float>(static_cast<int32_t>(clr.a + fError[i] + 0.5f));
-
-            const float fDiff = fAlph - Color[i].a;
-
-            if (3 != (i & 3))
-            {
-                assert(i < 15);
-                _Analysis_assume_(i < 15);
-                fError[i + 1] += fDiff * (7.0f / 16.0f);
-            }
-
-            if (i < 12)
-            {
-                if (i & 3)
-                    fError[i + 3] += fDiff * (3.0f / 16.0f);
-
-                fError[i + 4] += fDiff * (5.0f / 16.0f);
-
-                if (3 != (i & 3))
-                {
-                    assert(i < 11);
-                    _Analysis_assume_(i < 11);
-                    fError[i + 5] += fDiff * (1.0f / 16.0f);
-                }
-            }
-        }
-    }
-    else
-    {
-        for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; ++i)
-        {
-            XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&Color[i]), pColor[i]);
-        }
+        XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&Color[i]), pColor[i]);
     }
 
-    auto pBC1 = reinterpret_cast<D3DX_BC1 *>(pBC);
-    EncodeBC1(pBC1, Color, true, threshold, flags);
+    uint8_t pixels[NUM_PIXELS_PER_BLOCK * 4];
+
+    for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; i++)
+    {
+        pixels[i * 4 + 0] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].r * 255.0f + 0.5f)));
+        pixels[i * 4 + 1] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].g * 255.0f + 0.5f)));
+        pixels[i * 4 + 2] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].b * 255.0f + 0.5f)));
+        pixels[i * 4 + 3] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].a * 255.0f + 0.5f)));
+    }
+
+    rgbcx::encode_bc1(rgbcx::MAX_LEVEL, pBC, pixels, true, true);
 }
 
 
@@ -944,7 +915,6 @@ _Use_decl_annotations_
 void DirectX::D3DXEncodeBC3(uint8_t *pBC, const XMVECTOR *pColor, uint32_t flags) noexcept
 {
     assert(pBC && pColor);
-    static_assert(sizeof(D3DX_BC3) == 16, "D3DX_BC3 should be 16 bytes");
 
     HDRColorA Color[NUM_PIXELS_PER_BLOCK];
     for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; ++i)
@@ -952,190 +922,15 @@ void DirectX::D3DXEncodeBC3(uint8_t *pBC, const XMVECTOR *pColor, uint32_t flags
         XMStoreFloat4(reinterpret_cast<XMFLOAT4*>(&Color[i]), pColor[i]);
     }
 
-    auto pBC3 = reinterpret_cast<D3DX_BC3 *>(pBC);
+    uint8_t pixels[NUM_PIXELS_PER_BLOCK * 4];
 
-    // Quantize block to A8, using Floyd Stienberg error diffusion.  This
-    // increases the chance that colors will map directly to the quantized
-    // axis endpoints.
-    float fAlpha[NUM_PIXELS_PER_BLOCK] = {};
-    float fError[NUM_PIXELS_PER_BLOCK] = {};
-
-    float fMinAlpha = Color[0].a;
-    float fMaxAlpha = Color[0].a;
-
-    for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; ++i)
+    for (size_t i = 0; i < NUM_PIXELS_PER_BLOCK; i++)
     {
-        float fAlph = Color[i].a;
-        if (flags & BC_FLAGS_DITHER_A)
-            fAlph += fError[i];
-
-        fAlpha[i] = static_cast<float>(static_cast<int32_t>(fAlph * 255.0f + 0.5f)) * (1.0f / 255.0f);
-
-        if (fAlpha[i] < fMinAlpha)
-            fMinAlpha = fAlpha[i];
-        else if (fAlpha[i] > fMaxAlpha)
-            fMaxAlpha = fAlpha[i];
-
-        if (flags & BC_FLAGS_DITHER_A)
-        {
-            const float fDiff = fAlph - fAlpha[i];
-
-            if (3 != (i & 3))
-            {
-                assert(i < 15);
-                _Analysis_assume_(i < 15);
-                fError[i + 1] += fDiff * (7.0f / 16.0f);
-            }
-
-            if (i < 12)
-            {
-                if (i & 3)
-                    fError[i + 3] += fDiff * (3.0f / 16.0f);
-
-                fError[i + 4] += fDiff * (5.0f / 16.0f);
-
-                if (3 != (i & 3))
-                {
-                    assert(i < 11);
-                    _Analysis_assume_(i < 11);
-                    fError[i + 5] += fDiff * (1.0f / 16.0f);
-                }
-            }
-        }
+        pixels[i * 4 + 0] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].r * 255.0f + 0.5f)));
+        pixels[i * 4 + 1] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].g * 255.0f + 0.5f)));
+        pixels[i * 4 + 2] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].b * 255.0f + 0.5f)));
+        pixels[i * 4 + 3] = static_cast<uint8_t>(std::min(255.0f, std::max(0.0f, Color[i].a * 255.0f + 0.5f)));
     }
 
-#ifdef COLOR_WEIGHTS
-    if (0.0f == fMaxAlpha)
-    {
-        EncodeSolidBC1(&pBC3->dxt1, Color);
-        pBC3->alpha[0] = 0x00;
-        pBC3->alpha[1] = 0x00;
-        memset(pBC3->bitmap, 0x00, 6);
-    }
-#endif
-
-    // RGB part
-    EncodeBC1(&pBC3->bc1, Color, false, 0.f, flags);
-
-    // Alpha part
-    if (1.0f == fMinAlpha)
-    {
-        pBC3->alpha[0] = 0xff;
-        pBC3->alpha[1] = 0xff;
-        memset(pBC3->bitmap, 0x00, 6);
-        return;
-    }
-
-    // Optimize and Quantize Min and Max values
-    const uint32_t uSteps = ((0.0f == fMinAlpha) || (1.0f == fMaxAlpha)) ? 6u : 8u;
-
-    float fAlphaA, fAlphaB;
-    OptimizeAlpha<false>(&fAlphaA, &fAlphaB, fAlpha, uSteps);
-
-    auto const bAlphaA = static_cast<uint8_t>(static_cast<int32_t>(fAlphaA * 255.0f + 0.5f));
-    auto const bAlphaB = static_cast<uint8_t>(static_cast<int32_t>(fAlphaB * 255.0f + 0.5f));
-
-    fAlphaA = static_cast<float>(bAlphaA) * (1.0f / 255.0f);
-    fAlphaB = static_cast<float>(bAlphaB) * (1.0f / 255.0f);
-
-    // Setup block
-    if ((8 == uSteps) && (bAlphaA == bAlphaB))
-    {
-        pBC3->alpha[0] = bAlphaA;
-        pBC3->alpha[1] = bAlphaB;
-        memset(pBC3->bitmap, 0x00, 6);
-        return;
-    }
-
-    static const size_t pSteps6[] = { 0, 2, 3, 4, 5, 1 };
-    static const size_t pSteps8[] = { 0, 2, 3, 4, 5, 6, 7, 1 };
-
-    const size_t *pSteps;
-    float fStep[8] = {};
-
-    if (6 == uSteps)
-    {
-        pBC3->alpha[0] = bAlphaA;
-        pBC3->alpha[1] = bAlphaB;
-
-        fStep[0] = fAlphaA;
-        fStep[1] = fAlphaB;
-
-        for (size_t i = 1; i < 5; ++i)
-            fStep[i + 1] = (fStep[0] * float(5u - i) + fStep[1] * float(i)) * (1.0f / 5.0f);
-
-        fStep[6] = 0.0f;
-        fStep[7] = 1.0f;
-
-        pSteps = pSteps6;
-    }
-    else
-    {
-        pBC3->alpha[0] = bAlphaB;
-        pBC3->alpha[1] = bAlphaA;
-
-        fStep[0] = fAlphaB;
-        fStep[1] = fAlphaA;
-
-        for (size_t i = 1; i < 7; ++i)
-            fStep[i + 1] = (fStep[0] * float(7u - i) + fStep[1] * float(i)) * (1.0f / 7.0f);
-
-        pSteps = pSteps8;
-    }
-
-    // Encode alpha bitmap
-    auto const fSteps = static_cast<float>(uSteps - 1);
-    const float fScale = (fStep[0] != fStep[1]) ? (fSteps / (fStep[1] - fStep[0])) : 0.0f;
-
-    if (flags & BC_FLAGS_DITHER_A)
-        memset(fError, 0x00, NUM_PIXELS_PER_BLOCK * sizeof(float));
-
-    for (size_t iSet = 0; iSet < 2; iSet++)
-    {
-        uint32_t dw = 0;
-
-        const size_t iMin = iSet * 8;
-        const size_t iLim = iMin + 8;
-
-        for (size_t i = iMin; i < iLim; ++i)
-        {
-            float fAlph = Color[i].a;
-            if (flags & BC_FLAGS_DITHER_A)
-                fAlph += fError[i];
-            const float fDot = (fAlph - fStep[0]) * fScale;
-
-            uint32_t iStep;
-            if (fDot <= 0.0f)
-                iStep = ((6 == uSteps) && (fAlph <= fStep[0] * 0.5f)) ? 6u : 0u;
-            else if (fDot >= fSteps)
-                iStep = ((6 == uSteps) && (fAlph >= (fStep[1] + 1.0f) * 0.5f)) ? 7u : 1u;
-            else
-                iStep = uint32_t(pSteps[uint32_t(fDot + 0.5f)]);
-
-            dw = (iStep << 21) | (dw >> 3);
-
-            if (flags & BC_FLAGS_DITHER_A)
-            {
-                const float fDiff = (fAlph - fStep[iStep]);
-
-                if (3 != (i & 3))
-                    fError[i + 1] += fDiff * (7.0f / 16.0f);
-
-                if (i < 12)
-                {
-                    if (i & 3)
-                        fError[i + 3] += fDiff * (3.0f / 16.0f);
-
-                    fError[i + 4] += fDiff * (5.0f / 16.0f);
-
-                    if (3 != (i & 3))
-                        fError[i + 5] += fDiff * (1.0f / 16.0f);
-                }
-            }
-        }
-
-        pBC3->bitmap[0 + iSet * 3] = reinterpret_cast<uint8_t *>(&dw)[0];
-        pBC3->bitmap[1 + iSet * 3] = reinterpret_cast<uint8_t *>(&dw)[1];
-        pBC3->bitmap[2 + iSet * 3] = reinterpret_cast<uint8_t *>(&dw)[2];
-    }
+    rgbcx::encode_bc3(rgbcx::MAX_LEVEL, pBC, pixels);
 }
